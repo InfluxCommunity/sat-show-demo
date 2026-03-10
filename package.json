@@ -1,0 +1,24 @@
+{
+  "name": "sat-show-demo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NASA NEO + InfluxDB 3 demo with React + React Three Fiber",
+  "scripts": {
+    "dev:server": "npm run dev --workspace server",
+    "dev:client": "npm run dev --workspace client",
+    "build": "npm run build --workspaces",
+    "lint": "npm run lint --workspaces || true",
+    "format": "npm run format --workspaces || true"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "overrides": {
+    "react": "18.2.0",
+    "react-dom": "18.2.0"
+  },
+  "devDependencies": {
+    "react": "18.2.0",
+    "react-dom": "18.2.0"
+  }
+}
