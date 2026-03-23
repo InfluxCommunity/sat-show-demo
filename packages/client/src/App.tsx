@@ -1,165 +1,325 @@
 import {useMemo, useState} from 'react'
-import {GlobeScene} from './components/GlobeScene'
-import {NeoList} from './components/NeoList'
-import {SummaryPanel} from './components/SummaryPanel'
-import {useNeoDashboard} from './hooks/useNeoDashboard'
-import type {NeoPoint, TimeWindow} from './types'
+import {GlobeView} from './components/GlobeView'
+import {SatelliteList} from './components/SatelliteList'
+import {SatelliteSummary} from './components/SatelliteSummary'
+import {SqlConsole} from './components/SqlConsole'
+import {useSatelliteData} from './hooks/useSatelliteData'
+import type {SatelliteFilters, SatelliteObjectType, SatellitePoint} from './types'
+import {STATUS_META} from './utils/status'
+import badge from './assets/influxdb-badge.svg'
 import './App.css'
 
-const DAY_MS = 24 * 60 * 60 * 1000
-const WINDOW_LENGTH_DAYS = 14
+const typeOptions: Array<{label: string; value: SatelliteObjectType}> = [
+  {label: 'Payloads', value: 'payload'},
+  {label: 'Upper stages', value: 'rocket_body'},
+  {label: 'Debris', value: 'debris'},
+  {label: 'Unknown', value: 'unknown'}
+]
 
-const createWindowRange = (center: Date): TimeWindow => {
-  const span = Math.floor(WINDOW_LENGTH_DAYS / 2)
-  const from = new Date(center.getTime() - span * DAY_MS)
-  const to = new Date(center.getTime() + span * DAY_MS)
-  return {from: from.toISOString(), to: to.toISOString()}
+const altitudePresets = [
+  {id: 'all', label: 'All altitudes (200 – 42,000 km)', range: [200, 42000]},
+  {id: 'leo', label: 'LEO (200 – 1,200 km)', range: [200, 1200]},
+  {id: 'midleo', label: 'High LEO (1,200 – 2,000 km)', range: [1200, 2000]},
+  {id: 'meo', label: 'MEO (2,000 – 25,000 km)', range: [2000, 25000]},
+  {id: 'geo', label: 'GEO ring (34,000 – 42,000 km)', range: [34000, 42000]}
+]
+
+const shellOptions = [
+  {label: 'All shells', value: ''},
+  {label: 'LEO-Comm', value: 'LEO-Comm'},
+  {label: 'LEO-ISR', value: 'LEO-ISR'},
+  {label: 'LEO-Debris', value: 'LEO-Debris'},
+  {label: 'MEO-NAV', value: 'MEO-NAV'},
+  {label: 'GEO-Station', value: 'GEO-Station'}
+]
+
+const sqlDefault = `SELECT time, sat_id, name, object_type, shell, altitude_km, inclination_deg, raan_deg, phase_deg, period_min, threat_score, radar_cross_section
+FROM sat_objects
+WHERE object_type = 'debris'
+ORDER BY threat_score DESC
+LIMIT 600`
+
+const defaultFilters: SatelliteFilters = {
+  types: ['payload', 'rocket_body', 'debris'],
+  altitudeRange: altitudePresets[0].range,
+  limit: 2000
 }
 
-const formatWindowLabel = (windowRange: TimeWindow) => {
-  if (!windowRange.from || !windowRange.to) {
-    return 'Recent activity'
-  }
-  const formatter: Intl.DateTimeFormatOptions = {month: 'short', day: 'numeric', year: 'numeric'}
-  const start = new Date(windowRange.from)
-  const end = new Date(windowRange.to)
-  return `${start.toLocaleDateString(undefined, formatter)} – ${end.toLocaleDateString(undefined, formatter)}`
-}
+type MainView = 'globe' | 'sql'
 
 function App() {
-  const [windowCenter, setWindowCenter] = useState<Date>(() => new Date())
-  const windowRange = useMemo(() => createWindowRange(windowCenter), [windowCenter])
-  const windowLabel = useMemo(() => formatWindowLabel(windowRange), [windowRange])
-  const {points, summary, loading, refreshing, error, lastUpdated, ingesting, refresh, ingest} =
-    useNeoDashboard(windowRange)
-  const [selectedApproachId, setSelectedApproachId] = useState<string | null>(null)
+  const [filters, setFilters] = useState<SatelliteFilters>(defaultFilters)
+  const [mainView, setMainView] = useState<MainView>('sql')
+  const [fullScreen, setFullScreen] = useState(false)
+  const [filtersCollapsed, setFiltersCollapsed] = useState(false)
+  const [speed, setSpeed] = useState(28)
+  const [highlightedId, setHighlightedId] = useState<string | null>(null)
+  const [sqlOverlay, setSqlOverlay] = useState<{satellites: SatellitePoint[]; sql: string} | null>(null)
 
-  const activeNeo = useMemo(() => {
-    if (!points.length) {
-      return null
-    }
-    if (selectedApproachId) {
-      const match = points.find((point) => point.approachId === selectedApproachId)
-      if (match) {
-        return match
-      }
-    }
-    return points[0]
-  }, [points, selectedApproachId])
+  const {satellites, summary, loading, error, lastUpdated, refresh} = useSatelliteData(filters, 60000)
 
-  const handleSelect = (neo: NeoPoint) => {
-    setSelectedApproachId(neo.approachId)
+  const visibleSatellites = sqlOverlay ? sqlOverlay.satellites : satellites
+  const effectiveHighlightedId = highlightedId ?? visibleSatellites[0]?.satId ?? null
+  const selectedSatellite = useMemo(
+    () =>
+      effectiveHighlightedId
+        ? visibleSatellites.find((sat) => sat.satId === effectiveHighlightedId) ?? null
+        : visibleSatellites[0] ?? null,
+    [visibleSatellites, effectiveHighlightedId]
+  )
+
+  const toggleType = (type: SatelliteObjectType) => {
+    setFilters((prev) => {
+      const hasType = prev.types.includes(type)
+      const nextTypes = hasType ? prev.types.filter((value) => value !== type) : [...prev.types, type]
+      return {...prev, types: nextTypes.length ? nextTypes : [type]}
+    })
   }
 
-  const statusText = useMemo(() => {
-    if (loading) {
-      return 'Syncing NASA feed'
-    }
-    if (refreshing) {
-      return 'Refreshing telemetry'
-    }
-    return lastUpdated ? `Updated ${new Date(lastUpdated).toLocaleTimeString()}` : 'Idle'
-  }, [loading, refreshing, lastUpdated])
-
-  const shiftWindow = (days: number) => {
-    setWindowCenter((prev) => new Date(prev.getTime() + days * DAY_MS))
+  const setShell = (value: string) => {
+    setFilters((prev) => ({...prev, shell: value || undefined}))
   }
 
-  const jumpToToday = () => setWindowCenter(new Date())
-  const isCurrentWindow = Math.abs(windowCenter.getTime() - Date.now()) < DAY_MS
+  const handlePresetChange = (presetId: string) => {
+    const preset = altitudePresets.find((item) => item.id === presetId)
+    if (preset) {
+      setFilters((prev) => ({...prev, altitudeRange: preset.range}))
+    }
+  }
+
+  const activePresetId =
+    altitudePresets.find(
+      (preset) => preset.range[0] === filters.altitudeRange[0] && preset.range[1] === filters.altitudeRange[1]
+    )?.id ?? 'all'
+
+  const statusText = loading
+    ? 'Syncing orbital mesh…'
+    : lastUpdated
+      ? `Updated ${new Date(lastUpdated).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'})}`
+      : 'Live'
+
+  const handleApplySql = ({satellites: customSatellites, sql}: {satellites: SatellitePoint[]; sql: string}) => {
+    setSqlOverlay({satellites: customSatellites, sql})
+    setMainView('globe')
+    if (customSatellites.length) {
+      setHighlightedId(customSatellites[0].satId)
+    }
+  }
+
+  const clearSqlOverlay = () => {
+    setSqlOverlay(null)
+    setHighlightedId(null)
+  }
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${fullScreen ? ' globe-focus' : ''}`}>
       <header className="app-header">
-        <div>
-          <p className="eyebrow">Near-Earth Objects</p>
-          <h1>Orbital Operations Console</h1>
+        <div className="header-left">
+          <div className="badge-line">
+            <img src={badge} alt="Built on InfluxDB 3" className="influx-badge" />
+            <p className="eyebrow">Ground ops · LeoLabs mocked twin</p>
+          </div>
+          <h1>Space traffic dashboard</h1>
+          <p className="muted small">
+            Same story as the LeoLabs LEO visualization—only this view is powered entirely by InfluxDB 3.
+          </p>
         </div>
         <div className="header-actions">
           <span className="status-pill">{statusText}</span>
-          <button type="button" onClick={refresh} disabled={loading || refreshing}>
-            Refresh data
-          </button>
-          <button type="button" className="accent" onClick={ingest} disabled={ingesting}>
-            {ingesting ? 'Capturing…' : 'Capture now'}
-          </button>
+          {sqlOverlay && <span className="pill accent">SQL overlay active</span>}
         </div>
       </header>
-      <div className="window-controls panel">
-        <div className="window-buttons">
-          <button type="button" onClick={() => shiftWindow(-WINDOW_LENGTH_DAYS)}>
-            ← Earlier
-          </button>
-          <button type="button" onClick={() => shiftWindow(WINDOW_LENGTH_DAYS)}>
-            Later →
-          </button>
-          <button type="button" onClick={jumpToToday} disabled={isCurrentWindow}>
-            Jump to today
-          </button>
-        </div>
-        <div className="window-label">
-          <p className="muted">Date window</p>
-          <strong>{windowLabel}</strong>
-        </div>
-      </div>
       {error && <div className="error-banner">{error}</div>}
-      <main className="dashboard-grid">
-        <section className="panel globe-panel">
-          <div className="panel-header">
-            <h2>Orbital theater</h2>
-            <span className="muted">{points.length} tracked passes</span>
+      <div className="main-grid">
+        <aside className={`side-panel${filtersCollapsed ? ' collapsed' : ''}`}>
+          <div className="panel controls">
+            <h3>Mission filters</h3>
+            <div className="control-group">
+              <p className="muted small">Object tags</p>
+              <div className="chip-group">
+                {typeOptions.map((option) => {
+                  const active = filters.types.includes(option.value)
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      className={`chip${active ? ' active' : ''}`}
+                      onClick={() => toggleType(option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+            <div className="control-group">
+              <p className="muted small">Altitude window</p>
+              <select value={activePresetId} onChange={(event) => handlePresetChange(event.target.value)}>
+                {altitudePresets.map((preset) => (
+                  <option key={preset.id} value={preset.id}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="control-group">
+              <p className="muted small">Shell focus</p>
+              <select value={filters.shell ?? ''} onChange={(event) => setShell(event.target.value)}>
+                {shellOptions.map((shell) => (
+                  <option key={shell.value} value={shell.value}>
+                    {shell.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="control-group">
+              <p className="muted small">Animation speed</p>
+              <div className="slider-row">
+                <input
+                  type="range"
+                  min={5}
+                  max={80}
+                  value={speed}
+                  onChange={(event) => setSpeed(Number(event.target.value))}
+                />
+                <span>{speed}×</span>
+              </div>
+            </div>
+            {sqlOverlay && (
+              <div className="control-group">
+                <p className="muted small">Overlay</p>
+                <button type="button" onClick={clearSqlOverlay}>
+                  Clear SQL overlay
+                </button>
+                <p className="muted tiny">{sqlOverlay.sql.slice(0, 120)}…</p>
+              </div>
+            )}
+            <div className="legend">
+              <p className="muted tiny">Status legend</p>
+              {(['active', 'warning', 'inactive'] as const).map((key) => (
+                <div className="legend-row" key={key}>
+                  <span className={`legend-icon ${key}`} />
+                  <div>
+                    <strong>{STATUS_META[key].label}</strong>
+                    <p className="muted tiny">{STATUS_META[key].description}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="globe-wrapper">
-            <GlobeScene points={points} onSelect={handleSelect} highlightedId={activeNeo?.approachId} />
-            {loading && <div className="overlay">Syncing NEOs…</div>}
+          <button type="button" className="collapse-btn" onClick={() => setFiltersCollapsed((prev) => !prev)}>
+            {filtersCollapsed ? 'Show filters' : 'Hide filters'}
+          </button>
+        </aside>
+        <section className={`primary-panel${fullScreen ? ' fullscreen' : ''}`}>
+          <div className="primary-tabs">
+            <div className="tab-buttons">
+              <button type="button" className={mainView === 'sql' ? 'active' : ''} onClick={() => setMainView('sql')}>
+                SQL analytics
+              </button>
+              <button type="button" className={mainView === 'globe' ? 'active' : ''} onClick={() => setMainView('globe')}>
+                Globe view
+              </button>
+            </div>
+            <div className="primary-tab-actions">
+              <button type="button" onClick={refresh} disabled={loading}>
+                Refresh tracks
+              </button>
+              <button type="button" className="accent" onClick={() => setFullScreen((prev) => !prev)}>
+                {fullScreen ? 'Exit focus' : 'Focus view'}
+              </button>
+            </div>
           </div>
-          {activeNeo ? (
-            <div className="active-readout">
-              <div>
-                <p className="muted">Designation</p>
-                <strong>{activeNeo.name}</strong>
+          {mainView === 'sql' ? (
+            <div className="sql-view">
+              <SqlConsole initialQuery={sqlDefault} onApplyToGlobe={handleApplySql} />
+              <div className="panel insights-stack">
+                <h3>Operational insights</h3>
+                <SatelliteSummary
+                  summary={summary}
+                  activeCount={visibleSatellites.length}
+                  lastUpdated={lastUpdated}
+                  satellites={visibleSatellites}
+                />
+                <div className="side-divider" />
+                <h3>Watchlist</h3>
+                <SatelliteList
+                  satellites={visibleSatellites}
+                  selectedId={effectiveHighlightedId ?? undefined}
+                  onSelect={(sat) => setHighlightedId(sat.satId)}
+                />
               </div>
-              <div>
-                <p className="muted">Approach</p>
-                <strong>
-                  {new Date(activeNeo.approachTime).toLocaleString(undefined, {
-                    month: 'short',
-                    day: 'numeric',
-                    hour: '2-digit',
-                    minute: '2-digit'
-                  })}
-                </strong>
-              </div>
-              <div>
-                <p className="muted">Velocity</p>
-                <strong>{activeNeo.velocityKps.toFixed(2)} km/s</strong>
-              </div>
-              <div>
-                <p className="muted">Miss distance</p>
-                <strong>{activeNeo.missDistanceKm.toFixed(0)} km</strong>
-              </div>
-              <div>
-                <p className="muted">Risk</p>
-                <strong>{activeNeo.riskScore.toFixed(1)}</strong>
-              </div>
-              <div>
-                <p className="muted">Orbit</p>
-                <strong>{activeNeo.orbitingBody}</strong>
-              </div>
-              <div className="spacer" />
-              {activeNeo.referenceUrl && (
-                <a href={activeNeo.referenceUrl} target="_blank" rel="noreferrer" className="link">
-                  NASA JPL entry ↗
-                </a>
-              )}
             </div>
           ) : (
-            <p className="muted">Select an object to inspect track details.</p>
+            <div className="panel globe-panel">
+              <div className="panel-header">
+                <div>
+                  <h2>Orbital picture</h2>
+                  <p className="muted small">
+                    {visibleSatellites.length.toLocaleString()} tracks • Alt {filters.altitudeRange[0]} –{' '}
+                    {filters.altitudeRange[1]} km
+                  </p>
+                </div>
+                {sqlOverlay && <span className="pill accent">SQL overlay applied</span>}
+              </div>
+              <div className="globe-wrapper">
+                <GlobeView
+                  satellites={visibleSatellites}
+                  highlightedId={effectiveHighlightedId}
+                  speed={speed}
+                  onSelect={(sat) => setHighlightedId(sat.satId)}
+                  overlayLabel={sqlOverlay ? `SQL overlay (${visibleSatellites.length} rows)` : null}
+                />
+                {loading && <div className="overlay">Loading tracks…</div>}
+              </div>
+              {selectedSatellite ? (
+                <div className="active-card">
+                  <div>
+                    <p className="muted small">Sat ID</p>
+                    <strong>{selectedSatellite.satId}</strong>
+                  </div>
+                  <div>
+                    <p className="muted small">Shell</p>
+                    <strong>{selectedSatellite.shell}</strong>
+                  </div>
+                  <div>
+                    <p className="muted small">Altitude</p>
+                    <strong>{selectedSatellite.altitudeKm.toFixed(0)} km</strong>
+                  </div>
+                  <div>
+                    <p className="muted small">Inclination</p>
+                    <strong>{selectedSatellite.inclinationDeg.toFixed(1)}°</strong>
+                  </div>
+                  <div>
+                    <p className="muted small">Threat</p>
+                    <strong>{selectedSatellite.threatScore.toFixed(2)}</strong>
+                  </div>
+                  <div>
+                    <p className="muted small">Operator</p>
+                    <strong>{selectedSatellite.operator}</strong>
+                  </div>
+                  <div>
+                    <p className="muted small">Last contact</p>
+                    <strong>
+                      {selectedSatellite.lastContact
+                        ? new Date(selectedSatellite.lastContact).toLocaleTimeString([], {
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })
+                        : '—'}
+                    </strong>
+                  </div>
+                </div>
+              ) : (
+                <p className="muted small">Select a track to inspect details.</p>
+              )}
+            </div>
           )}
         </section>
-        <SummaryPanel summary={summary} />
-        <NeoList points={points} selectedId={activeNeo?.approachId} onSelect={handleSelect} />
-      </main>
+      </div>
+      <footer className="footer-badge">
+        <img src={badge} alt="Built on InfluxDB 3" />
+      </footer>
     </div>
   )
 }

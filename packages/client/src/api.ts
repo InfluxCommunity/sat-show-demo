@@ -1,4 +1,12 @@
-import type {NeoResponse, NeoSummary, TimeWindow} from './types'
+import type {
+  NeoResponse,
+  NeoSummary,
+  SatelliteFilters,
+  SatelliteResponse,
+  SatelliteSummary,
+  SqlQueryResult,
+  TimeWindow
+} from './types'
 
 const baseUrl =
   (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') ?? 'http://localhost:4000'
@@ -19,7 +27,8 @@ const request = async <T>(path: string, options: RequestOptions = {}): Promise<T
     })
   }
 
-  const {params, ...init} = options
+  const {params: _params, ...init} = options
+  void _params
 
   const response = await fetch(url.toString(), {
     headers: {
@@ -52,3 +61,29 @@ export const fetchSummaryResponse = (window?: TimeWindow) =>
   request<NeoSummary>('/api/summary', {params: windowParams(window)})
 export const requestManualIngest = () =>
   request<{written: number; lastIngest: string | null}>('/api/ingest', {method: 'POST'})
+export const runSqlQuery = (sql: string) =>
+  request<SqlQueryResult>('/api/query', {method: 'POST', body: JSON.stringify({sql})})
+
+const satelliteFilterParams = (filters: SatelliteFilters): QueryParams => {
+  const params: QueryParams = {}
+  if (filters.limit) {
+    params.limit = String(filters.limit)
+  }
+  if (filters.shell) {
+    params.shell = filters.shell
+  }
+  if (filters.types?.length) {
+    params.types = filters.types.join(',')
+  }
+  if (typeof filters.altitudeRange?.[0] === 'number') {
+    params.minAlt = String(filters.altitudeRange[0])
+  }
+  if (typeof filters.altitudeRange?.[1] === 'number') {
+    params.maxAlt = String(filters.altitudeRange[1])
+  }
+  return params
+}
+
+export const fetchSatellites = (filters: SatelliteFilters) =>
+  request<SatelliteResponse>('/api/satellites', {params: satelliteFilterParams(filters)})
+export const fetchSatelliteSummary = () => request<SatelliteSummary>('/api/satellites/summary')

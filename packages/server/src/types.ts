@@ -68,3 +68,46 @@ export interface TimeWindow {
   from?: string
   to?: string
 }
+
+export interface SatelliteDTO {
+  satId: string
+  name: string
+  objectType: string
+  shell: string
+  country: string
+  operator: string
+  status: string
+  altitudeKm: number
+  perigeeKm: number
+  apogeeKm: number
+  inclinationDeg: number
+  raanDeg: number
+  phaseDeg: number
+  periodMin: number
+  velocityKps: number
+  threatScore: number
+  radarCrossSection: number
+  colorHex: string
+  timestamp: string
+  lastContact: string
+}
+
+export interface SatelliteSummaryBucket {
+  key: string
+  count: number
+}
+
+export interface SatelliteSummaryDTO {
+  total: number
+  types: SatelliteSummaryBucket[]
+  statuses: SatelliteSummaryBucket[]
+  countries: SatelliteSummaryBucket[]
+  shells: SatelliteSummaryBucket[]
+}
+
+export interface SatelliteFilters {
+  types?: string[]
+  minAlt?: number
+  maxAlt?: number
+  shell?: string
+}

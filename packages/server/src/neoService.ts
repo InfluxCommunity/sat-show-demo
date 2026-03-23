@@ -2,6 +2,7 @@ import axios from 'axios'
 import {Point} from '@influxdata/influxdb3-client'
 import {appConfig} from './config'
 import {influxClient} from './influxClient'
+import {collectRows, rowTimeToIso} from './queryUtils'
 import {
   CloseApproach,
   NeoBrowseResponse,
@@ -214,39 +215,6 @@ export const scheduleIngest = (intervalMs: number, logger: Console) => {
   }
   execute()
   return setInterval(execute, intervalMs)
-}
-
-const rowTimeToIso = (timeValue: any): string => {
-  if (!timeValue) {
-    return ''
-  }
-  if (typeof timeValue === 'string') {
-    return timeValue
-  }
-  if (timeValue instanceof Date) {
-    return timeValue.toISOString()
-  }
-  if (typeof timeValue === 'number') {
-    return new Date(timeValue).toISOString()
-  }
-  return new Date(timeValue).toISOString()
-}
-
-const collectRows = async (query: string): Promise<Record<string, any>[]> => {
-  try {
-    const rows: Record<string, any>[] = []
-    const iterator = await influxClient.query(query, appConfig.influx.database)
-    for await (const row of iterator as AsyncIterable<Record<string, any>>) {
-      rows.push(row)
-    }
-    return rows
-  } catch (error) {
-    const message = error instanceof Error ? error.message : ''
-    if (message.includes("neo_flyby' not found") || message.includes('neo_flyby')) {
-      return []
-    }
-    throw error
-  }
 }
 
 export const fetchNeoPoints = async (limit = 40, window?: TimeWindow): Promise<NeoPointDTO[]> => {

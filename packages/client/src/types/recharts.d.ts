@@ -1,13 +1,16 @@
 import type {ComponentType} from 'react'
 
 declare module 'recharts' {
-  export const ResponsiveContainer: ComponentType<any>
-  export const AreaChart: ComponentType<any>
-  export const Area: ComponentType<any>
-  export const XAxis: ComponentType<any>
-  export const YAxis: ComponentType<any>
-  export const Tooltip: ComponentType<any>
-  export const PieChart: ComponentType<any>
-  export const Pie: ComponentType<any>
-  export const Cell: ComponentType<any>
+  type Props = Record<string, unknown>
+  export const ResponsiveContainer: ComponentType<Props>
+  export const AreaChart: ComponentType<Props>
+  export const Area: ComponentType<Props>
+  export const XAxis: ComponentType<Props>
+  export const YAxis: ComponentType<Props>
+  export const Tooltip: ComponentType<Props>
+  export const PieChart: ComponentType<Props>
+  export const Pie: ComponentType<Props>
+  export const Cell: ComponentType<Props>
+  export const BarChart: ComponentType<Props>
+  export const Bar: ComponentType<Props>
 }

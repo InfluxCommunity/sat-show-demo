@@ -3,6 +3,8 @@ import express from 'express'
 import {appConfig, validateConfig} from './config'
 import {closeInfluxClient} from './influxClient'
 import {fetchNeoPoints, fetchNeoSummary, getLastIngestIso, scheduleIngest, triggerIngest} from './neoService'
+import {fetchSatellites, fetchSatelliteSummary} from './satelliteService'
+import {runSqlQuery} from './queryUtils'
 
 const parseDateParam = (value: unknown): string | undefined => {
   if (typeof value !== 'string') {
@@ -22,6 +24,25 @@ const extractWindow = (query: Record<string, unknown>) => {
     return undefined
   }
   return {from, to}
+}
+
+const parseNumberParam = (value: unknown): number | undefined => {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : undefined
+}
+
+const parseListParam = (value: unknown): string[] | undefined => {
+  if (typeof value !== 'string') {
+    return undefined
+  }
+  const list = value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean)
+  return list.length ? list : undefined
 }
 
 validateConfig()
@@ -59,6 +80,43 @@ app.post('/api/ingest', async (_req, res, next) => {
   try {
     const result = await triggerIngest()
     res.json({...result, lastIngest: getLastIngestIso()})
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/satellites', async (req, res, next) => {
+  try {
+    const limit = parseNumberParam(req.query.limit) ?? 1500
+    const types = parseListParam(req.query.types)
+    const minAlt = parseNumberParam(req.query.minAlt)
+    const maxAlt = parseNumberParam(req.query.maxAlt)
+    const shell = typeof req.query.shell === 'string' ? req.query.shell.trim() : undefined
+    const data = await fetchSatellites(limit, {types, minAlt, maxAlt, shell})
+    res.json({data, generatedAt: new Date().toISOString()})
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.get('/api/satellites/summary', async (_req, res, next) => {
+  try {
+    const summary = await fetchSatelliteSummary()
+    res.json(summary)
+  } catch (error) {
+    next(error)
+  }
+})
+
+app.post('/api/query', async (req, res, next) => {
+  try {
+    const {sql} = req.body ?? {}
+    if (typeof sql !== 'string' || !sql.trim()) {
+      res.status(400).json({message: 'SQL string is required'})
+      return
+    }
+    const result = await runSqlQuery(sql)
+    res.json(result)
   } catch (error) {
     next(error)
   }
